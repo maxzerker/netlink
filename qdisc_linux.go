@@ -2,7 +2,7 @@ package netlink
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -697,7 +697,7 @@ var (
 )
 
 func initClock() {
-	data, err := ioutil.ReadFile("/proc/net/psched")
+	data, err := os.ReadFile("/proc/net/psched")
 	if err != nil {
 		return
 	}

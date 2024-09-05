@@ -11,8 +11,24 @@ const (
 )
 
 var L4ProtoMap = map[uint8]string{
+	1:  "icmp",
 	6:  "tcp",
 	17: "udp",
+}
+
+var TCPStateMap = map[uint8]string{
+	0:  "NONE",
+	1:  "SYN_SENT",
+	2:  "SYN_RECV",
+	3:  "ESTABLISHED",
+	4:  "FIN_WAIT",
+	5:  "CLOSE_WAIT",
+	6:  "LAST_ACK",
+	7:  "TIME_WAIT",
+	8:  "CLOSE",
+	9:  "LISTEN",
+	10: "MAX",
+	11: "IGNORE",
 }
 
 // From https://git.netfilter.org/libnetfilter_conntrack/tree/include/libnetfilter_conntrack/libnetfilter_conntrack_tcp.h
@@ -32,19 +48,19 @@ var L4ProtoMap = map[uint8]string{
 //		TCP_CONNTRACK_IGNORE
 //	 };
 const (
-		TCP_CONNTRACK_NONE = 0
-		TCP_CONNTRACK_SYN_SENT = 1
-		TCP_CONNTRACK_SYN_RECV = 2
-		TCP_CONNTRACK_ESTABLISHED = 3
-		TCP_CONNTRACK_FIN_WAIT = 4
-		TCP_CONNTRACK_CLOSE_WAIT = 5
-		TCP_CONNTRACK_LAST_ACK = 6
-		TCP_CONNTRACK_TIME_WAIT = 7
-		TCP_CONNTRACK_CLOSE = 8
-		TCP_CONNTRACK_LISTEN = 9
-		TCP_CONNTRACK_SYN_SENT2 = 9
-		TCP_CONNTRACK_MAX = 10
-		TCP_CONNTRACK_IGNORE = 11
+	TCP_CONNTRACK_NONE        = 0
+	TCP_CONNTRACK_SYN_SENT    = 1
+	TCP_CONNTRACK_SYN_RECV    = 2
+	TCP_CONNTRACK_ESTABLISHED = 3
+	TCP_CONNTRACK_FIN_WAIT    = 4
+	TCP_CONNTRACK_CLOSE_WAIT  = 5
+	TCP_CONNTRACK_LAST_ACK    = 6
+	TCP_CONNTRACK_TIME_WAIT   = 7
+	TCP_CONNTRACK_CLOSE       = 8
+	TCP_CONNTRACK_LISTEN      = 9
+	TCP_CONNTRACK_SYN_SENT2   = 9
+	TCP_CONNTRACK_MAX         = 10
+	TCP_CONNTRACK_IGNORE      = 11
 )
 
 // All the following constants are coming from:
@@ -62,10 +78,13 @@ const (
 //
 // 	IPCTNL_MSG_MAX
 // };
+
+type CntlMsgType int
+
 const (
-	IPCTNL_MSG_CT_NEW = 0
-	IPCTNL_MSG_CT_GET    = 1
-	IPCTNL_MSG_CT_DELETE = 2
+	IPCTNL_MSG_CT_NEW    CntlMsgType = iota //0
+	IPCTNL_MSG_CT_GET    CntlMsgType = iota //1
+	IPCTNL_MSG_CT_DELETE CntlMsgType = iota //2
 )
 
 // #define NFNETLINK_V0	0
@@ -171,9 +190,12 @@ const (
 // };
 // #define CTA_PROTO_MAX (__CTA_PROTO_MAX - 1)
 const (
-	CTA_PROTO_NUM      = 1
-	CTA_PROTO_SRC_PORT = 2
-	CTA_PROTO_DST_PORT = 3
+	CTA_PROTO_NUM       = 1
+	CTA_PROTO_SRC_PORT  = 2
+	CTA_PROTO_DST_PORT  = 3
+	CTA_PROTO_ICMP_ID   = 4
+	CTA_PROTO_ICMP_TYPE = 5
+	CTA_PROTO_ICMP_CODE = 6
 )
 
 // enum ctattr_protoinfo {
@@ -186,9 +208,9 @@ const (
 // #define CTA_PROTOINFO_MAX (__CTA_PROTOINFO_MAX - 1)
 const (
 	CTA_PROTOINFO_UNSPEC = 0
-	CTA_PROTOINFO_TCP = 1
-	CTA_PROTOINFO_DCCP = 2
-	CTA_PROTOINFO_SCTP = 3
+	CTA_PROTOINFO_TCP    = 1
+	CTA_PROTOINFO_DCCP   = 2
+	CTA_PROTOINFO_SCTP   = 3
 )
 
 // enum ctattr_protoinfo_tcp {

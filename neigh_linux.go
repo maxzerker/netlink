@@ -449,7 +449,8 @@ func neighSubscribeAt(newNs, curNs netns.NsHandle, ch chan<- NeighUpdate, done <
 						continue
 					}
 					if cberr != nil {
-						cberr(syscall.Errno(-nError))
+						cberr(fmt.Errorf("error message: %v",
+							syscall.Errno(-nError)))
 					}
 					return
 				}

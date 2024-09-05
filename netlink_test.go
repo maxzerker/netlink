@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -33,7 +32,7 @@ func skipUnlessRoot(t testing.TB) {
 
 func skipUnlessKModuleLoaded(t *testing.T, moduleNames ...string) {
 	t.Helper()
-	file, err := ioutil.ReadFile("/proc/modules")
+	file, err := os.ReadFile("/proc/modules")
 	if err != nil {
 		t.Fatal("Failed to open /proc/modules", err)
 	}
@@ -196,7 +195,7 @@ func setUpNetlinkTestWithKModule(t *testing.T, moduleNames ...string) tearDownNe
 	return setUpNetlinkTest(t)
 }
 func setUpNamedNetlinkTestWithKModule(t *testing.T, moduleNames ...string) (string, tearDownNetlinkTest) {
-	file, err := ioutil.ReadFile("/proc/modules")
+	file, err := os.ReadFile("/proc/modules")
 	if err != nil {
 		t.Fatal("Failed to open /proc/modules", err)
 	}

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/vishvananda/netlink/nl"
+	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
 
@@ -100,7 +102,7 @@ func (h *Handle) ConntrackTableList(table ConntrackTableType, family InetFamily)
 // conntrack -F [table]            Flush table
 // The flush operation applies to all the family types
 func (h *Handle) ConntrackTableFlush(table ConntrackTableType) error {
-	req := h.newConntrackRequest(table, unix.AF_INET, nl.IPCTNL_MSG_CT_DELETE, unix.NLM_F_ACK)
+	req := h.newConntrackRequest(table, unix.AF_INET, int(nl.IPCTNL_MSG_CT_DELETE), unix.NLM_F_ACK)
 	_, err := req.Execute(unix.NETLINK_NETFILTER, 0)
 	return err
 }
@@ -108,7 +110,7 @@ func (h *Handle) ConntrackTableFlush(table ConntrackTableType) error {
 // ConntrackCreate creates a new conntrack flow in the desired table using the handle
 // conntrack -I [table]		Create a conntrack or expectation
 func (h *Handle) ConntrackCreate(table ConntrackTableType, family InetFamily, flow *ConntrackFlow) error {
-	req := h.newConntrackRequest(table, family, nl.IPCTNL_MSG_CT_NEW, unix.NLM_F_ACK|unix.NLM_F_CREATE)
+	req := h.newConntrackRequest(table, family, int(nl.IPCTNL_MSG_CT_NEW), unix.NLM_F_ACK|unix.NLM_F_CREATE)
 	attr, err := flow.toNlData()
 	if err != nil {
 		return err
@@ -125,7 +127,7 @@ func (h *Handle) ConntrackCreate(table ConntrackTableType, family InetFamily, fl
 // ConntrackUpdate updates an existing conntrack flow in the desired table using the handle
 // conntrack -U [table]		Update a conntrack
 func (h *Handle) ConntrackUpdate(table ConntrackTableType, family InetFamily, flow *ConntrackFlow) error {
-	req := h.newConntrackRequest(table, family, nl.IPCTNL_MSG_CT_NEW, unix.NLM_F_ACK|unix.NLM_F_REPLACE)
+	req := h.newConntrackRequest(table, family, int(nl.IPCTNL_MSG_CT_NEW), unix.NLM_F_ACK|unix.NLM_F_REPLACE)
 	attr, err := flow.toNlData()
 	if err != nil {
 		return err
@@ -152,7 +154,7 @@ func (h *Handle) ConntrackDeleteFilters(table ConntrackTableType, family InetFam
 		flow := parseRawData(dataRaw)
 		for _, filter := range filters {
 			if match := filter.MatchConntrackFlow(flow); match {
-				req2 := h.newConntrackRequest(table, family, nl.IPCTNL_MSG_CT_DELETE, unix.NLM_F_ACK)
+				req2 := h.newConntrackRequest(table, family, int(nl.IPCTNL_MSG_CT_DELETE), unix.NLM_F_ACK)
 				// skip the first 4 byte that are the netfilter header, the newConntrackRequest is adding it already
 				req2.AddRawData(dataRaw[4:])
 				req2.Execute(unix.NETLINK_NETFILTER, 0)
@@ -180,7 +182,7 @@ func (h *Handle) newConntrackRequest(table ConntrackTableType, family InetFamily
 }
 
 func (h *Handle) dumpConntrackTable(table ConntrackTableType, family InetFamily) ([][]byte, error) {
-	req := h.newConntrackRequest(table, family, nl.IPCTNL_MSG_CT_GET, unix.NLM_F_DUMP)
+	req := h.newConntrackRequest(table, family, int(nl.IPCTNL_MSG_CT_GET), unix.NLM_F_DUMP)
 	return req.Execute(unix.NETLINK_NETFILTER, 0)
 }
 
@@ -196,10 +198,11 @@ type ProtoInfo interface {
 type ProtoInfoTCP struct {
 	State uint8
 }
+
 // Protocol returns "tcp".
-func (*ProtoInfoTCP) Protocol() string {return "tcp"}
+func (*ProtoInfoTCP) Protocol() string { return "tcp" }
 func (p *ProtoInfoTCP) toNlData() ([]*nl.RtAttr, error) {
-	ctProtoInfo := nl.NewRtAttr(unix.NLA_F_NESTED | nl.CTA_PROTOINFO, []byte{})
+	ctProtoInfo := nl.NewRtAttr(unix.NLA_F_NESTED|nl.CTA_PROTOINFO, []byte{})
 	ctProtoInfoTCP := nl.NewRtAttr(unix.NLA_F_NESTED|nl.CTA_PROTOINFO_TCP, []byte{})
 	ctProtoInfoTCPState := nl.NewRtAttr(nl.CTA_PROTOINFO_TCP_STATE, nl.Uint8Attr(p.State))
 	ctProtoInfoTCP.AddChild(ctProtoInfoTCPState)
@@ -209,14 +212,16 @@ func (p *ProtoInfoTCP) toNlData() ([]*nl.RtAttr, error) {
 }
 
 // ProtoInfoSCTP only supports the protocol name.
-type ProtoInfoSCTP struct {}
+type ProtoInfoSCTP struct{}
+
 // Protocol returns "sctp".
-func (*ProtoInfoSCTP) Protocol() string {return "sctp"}
+func (*ProtoInfoSCTP) Protocol() string { return "sctp" }
 
 // ProtoInfoDCCP only supports the protocol name.
-type ProtoInfoDCCP struct {}
+type ProtoInfoDCCP struct{}
+
 // Protocol returns "dccp".
-func (*ProtoInfoDCCP) Protocol() string {return "dccp"}
+func (*ProtoInfoDCCP) Protocol() string { return "dccp" }
 
 // The full conntrack flow structure is very complicated and can be found in the file:
 // http://git.netfilter.org/libnetfilter_conntrack/tree/include/internal/object.h
@@ -229,6 +234,9 @@ type IPTuple struct {
 	Protocol uint8
 	SrcIP    net.IP
 	SrcPort  uint16
+	ICMPId   uint16
+	ICMPType uint8
+	ICMPCode uint8
 }
 
 // toNlData generates the inner fields of a nested tuple netlink datastructure
@@ -258,7 +266,7 @@ func (t *IPTuple) toNlData(family uint8) ([]*nl.RtAttr, error) {
 	ctTupleProtoSrcPort := nl.NewRtAttr(nl.CTA_PROTO_SRC_PORT, nl.BEUint16Attr(t.SrcPort))
 	ctTupleProto.AddChild(ctTupleProtoSrcPort)
 	ctTupleProtoDstPort := nl.NewRtAttr(nl.CTA_PROTO_DST_PORT, nl.BEUint16Attr(t.DstPort))
-	ctTupleProto.AddChild(ctTupleProtoDstPort, )
+	ctTupleProto.AddChild(ctTupleProtoDstPort)
 
 	return []*nl.RtAttr{ctTupleIP, ctTupleProto}, nil
 }
@@ -271,6 +279,8 @@ type ConntrackFlow struct {
 	Zone       uint16
 	TimeStart  uint64
 	TimeStop   uint64
+	Id         uint32
+	Status     uint32
 	TimeOut    uint32
 	Labels     []byte
 	ProtoInfo  ProtoInfo
@@ -283,8 +293,8 @@ func (s *ConntrackFlow) String() string {
 	start := time.Unix(0, int64(s.TimeStart))
 	stop := time.Unix(0, int64(s.TimeStop))
 	timeout := int32(s.TimeOut)
-	res := fmt.Sprintf("%s\t%d src=%s dst=%s sport=%d dport=%d packets=%d bytes=%d\tsrc=%s dst=%s sport=%d dport=%d packets=%d bytes=%d mark=0x%x ",
-		nl.L4ProtoMap[s.Forward.Protocol], s.Forward.Protocol,
+	res := fmt.Sprintf("%s\t%d id=%d src=%s dst=%s sport=%d dport=%d packets=%d bytes=%d\tsrc=%s dst=%s sport=%d dport=%d packets=%d bytes=%d mark=%d timeout=%d status=%d",
+		nl.L4ProtoMap[s.Forward.Protocol], s.Forward.Protocol, s.Id,
 		s.Forward.SrcIP.String(), s.Forward.DstIP.String(), s.Forward.SrcPort, s.Forward.DstPort, s.Forward.Packets, s.Forward.Bytes,
 		s.Reverse.SrcIP.String(), s.Reverse.DstIP.String(), s.Reverse.SrcPort, s.Reverse.DstPort, s.Reverse.Packets, s.Reverse.Bytes,
 		s.Mark)
@@ -335,7 +345,7 @@ func (s *ConntrackFlow) toNlData() ([]*nl.RtAttr, error) {
 	//	<len, CTA_TIMEOUT>
 	//	<BEuint64>
 	//	<len, NLA_F_NESTED|CTA_PROTOINFO>
- 
+
 	// CTA_TUPLE_ORIG
 	ctTupleOrig := nl.NewRtAttr(unix.NLA_F_NESTED|nl.CTA_TUPLE_ORIG, nil)
 	forwardFlowAttrs, err := s.Forward.toNlData(s.FamilyType)
@@ -402,8 +412,8 @@ func parseIpTuple(reader *bytes.Reader, tpl *IPTuple) uint8 {
 	if t == nl.CTA_PROTO_NUM {
 		tpl.Protocol = uint8(v[0])
 	}
-	// We only parse TCP & UDP headers. Skip the others.
-	if tpl.Protocol != unix.IPPROTO_TCP && tpl.Protocol != unix.IPPROTO_UDP {
+	// We only parse TCP & UDP & ICMP headers. Skip the others.
+	if tpl.Protocol != unix.IPPROTO_TCP && tpl.Protocol != unix.IPPROTO_UDP && tpl.Protocol != unix.IPPROTO_ICMP {
 		// skip the rest
 		bytesRemaining := protoInfoTotalLen - protoInfoBytesRead
 		reader.Seek(int64(bytesRemaining), seekCurrent)
@@ -412,21 +422,47 @@ func parseIpTuple(reader *bytes.Reader, tpl *IPTuple) uint8 {
 	// Skip 3 bytes of padding
 	reader.Seek(3, seekCurrent)
 	protoInfoBytesRead += 3
-	for i := 0; i < 2; i++ {
-		_, t, _ := parseNfAttrTL(reader)
-		protoInfoBytesRead += uint16(nl.SizeofNfattr)
-		switch t {
-		case nl.CTA_PROTO_SRC_PORT:
-			parseBERaw16(reader, &tpl.SrcPort)
-			protoInfoBytesRead += 2
-		case nl.CTA_PROTO_DST_PORT:
-			parseBERaw16(reader, &tpl.DstPort)
+
+	if tpl.Protocol == unix.IPPROTO_TCP || tpl.Protocol == unix.IPPROTO_UDP {
+		for i := 0; i < 2; i++ {
+			_, t, _ := parseNfAttrTL(reader)
+			protoInfoBytesRead += uint16(nl.SizeofNfattr)
+			switch t {
+			case nl.CTA_PROTO_SRC_PORT:
+				parseBERaw16(reader, &tpl.SrcPort)
+				protoInfoBytesRead += 2
+			case nl.CTA_PROTO_DST_PORT:
+				parseBERaw16(reader, &tpl.DstPort)
+				protoInfoBytesRead += 2
+			}
+			// Skip 2 bytes of padding
+			reader.Seek(2, seekCurrent)
 			protoInfoBytesRead += 2
 		}
-		// Skip 2 bytes of padding
-		reader.Seek(2, seekCurrent)
-		protoInfoBytesRead += 2
+	} else if tpl.Protocol == unix.IPPROTO_ICMP {
+		for i := 0; i < 3; i++ {
+			_, t, _ := parseNfAttrTL(reader)
+			switch t {
+			case nl.CTA_PROTO_ICMP_ID:
+				parseBERaw16(reader, &tpl.ICMPId)
+				protoInfoBytesRead += 2
+			case nl.CTA_PROTO_ICMP_TYPE:
+				parseBERaw8(reader, &tpl.ICMPType)
+				// Skip 8 bit padding
+				reader.Seek(1, seekCurrent)
+				protoInfoBytesRead += 2
+			case nl.CTA_PROTO_ICMP_CODE:
+				parseBERaw8(reader, &tpl.ICMPCode)
+				// Skip 8 bit padding
+				reader.Seek(1, seekCurrent)
+				protoInfoBytesRead += 2
+			}
+			// Skip 2 bytes of padding
+			reader.Seek(2, seekCurrent)
+			protoInfoBytesRead += 2
+		}
 	}
+
 	// Skip any remaining/unknown parts of the message
 	bytesRemaining := protoInfoTotalLen - protoInfoBytesRead
 	reader.Seek(int64(bytesRemaining), seekCurrent)
@@ -459,6 +495,10 @@ func skipNfAttrValue(r *bytes.Reader, len uint16) uint16 {
 	len = (len + nl.NLA_ALIGNTO - 1) & ^(nl.NLA_ALIGNTO - 1)
 	r.Seek(int64(len), seekCurrent)
 	return len
+}
+
+func parseBERaw8(r *bytes.Reader, v *uint8) {
+	binary.Read(r, binary.BigEndian, v)
 }
 
 func parseBERaw16(r *bytes.Reader, v *uint16) {
@@ -518,12 +558,12 @@ func parseTimeStamp(r *bytes.Reader, readSize uint16) (tstart, tstop uint64) {
 
 func parseProtoInfoTCPState(r *bytes.Reader) (s uint8) {
 	binary.Read(r, binary.BigEndian, &s)
-	r.Seek(nl.SizeofNfattr - 1, seekCurrent)
+	r.Seek(nl.SizeofNfattr-1, seekCurrent)
 	return s
 }
 
 // parseProtoInfoTCP reads the entire nested protoinfo structure, but only parses the state attr.
-func parseProtoInfoTCP(r *bytes.Reader, attrLen uint16) (*ProtoInfoTCP) {
+func parseProtoInfoTCP(r *bytes.Reader, attrLen uint16) *ProtoInfoTCP {
 	p := new(ProtoInfoTCP)
 	bytesRead := 0
 	for bytesRead < int(attrLen) {
@@ -570,8 +610,18 @@ func parseProtoInfo(r *bytes.Reader, attrLen uint16) (p ProtoInfo) {
 	return p
 }
 
+func parseConnectionId(r *bytes.Reader) (id uint32) {
+	parseBERaw32(r, &id)
+	return
+}
+
 func parseTimeOut(r *bytes.Reader) (ttimeout uint32) {
 	parseBERaw32(r, &ttimeout)
+	return
+}
+
+func parseConnectionStatus(r *bytes.Reader) (status uint32) {
+	parseBERaw32(r, &status)
 	return
 }
 
@@ -635,13 +685,17 @@ func parseRawData(data []byte) *ConntrackFlow {
 			}
 		} else {
 			switch t {
+			case nl.CTA_ID:
+				s.Id = parseConnectionId(reader)
 			case nl.CTA_MARK:
 				s.Mark = parseConnectionMark(reader)
-				case nl.CTA_LABELS:
+			case nl.CTA_STATUS:
+				s.Status = parseConnectionStatus(reader)
+			case nl.CTA_LABELS:
 				s.Labels = parseConnectionLabels(reader)
 			case nl.CTA_TIMEOUT:
 				s.TimeOut = parseTimeOut(reader)
-			case nl.CTA_ID, nl.CTA_STATUS, nl.CTA_USE:
+			case nl.CTA_USE:
 				skipNfAttrValue(reader, l)
 			case nl.CTA_ZONE:
 				s.Zone = parseConnectionZone(reader)
@@ -890,3 +944,131 @@ func (f *ConntrackFilter) MatchConntrackFlow(flow *ConntrackFlow) bool {
 }
 
 var _ CustomConntrackFilter = (*ConntrackFilter)(nil)
+
+// ConntrackEvent is used to pass information back from ContrackSubscribe()
+type ConntrackEvent struct {
+	Type nl.CntlMsgType
+	Flow ConntrackFlow
+}
+
+func ConntrackSubscribe(ch chan<- ConntrackEvent, done <-chan struct{}) error {
+	return conntrackSubscribeAt(netns.None(), netns.None(), ch, done, nil, 0)
+}
+
+func ConntrackSubscribeAt(ns netns.NsHandle, ch chan<- ConntrackEvent, done <-chan struct{}) error {
+	return conntrackSubscribeAt(ns, netns.None(), ch, done, nil, 0)
+}
+
+type ConntrackSubscribeOptions struct {
+	Namespace         *netns.NsHandle
+	ErrorCallback     func(error)
+	ReceiveBufferSize int
+}
+
+func ConntrackSubscribeWithOptions(ch chan<- ConntrackEvent, done <-chan struct{}, options ConntrackSubscribeOptions) error {
+	if options.Namespace == nil {
+		none := netns.None()
+		options.Namespace = &none
+	}
+	return conntrackSubscribeAt(*options.Namespace, netns.None(), ch, done, options.ErrorCallback, options.ReceiveBufferSize)
+}
+
+func conntrackSubscribeAt(newNs, curNs netns.NsHandle, ch chan<- ConntrackEvent, done <-chan struct{}, cberr func(error), rcvbuf int) error {
+	s, err := nl.SubscribeAt(newNs, curNs, unix.NETLINK_NETFILTER, unix.NFNLGRP_CONNTRACK_NEW, unix.NFNLGRP_CONNTRACK_UPDATE, unix.NFNLGRP_CONNTRACK_DESTROY)
+	if err != nil {
+		return err
+	}
+	if done != nil {
+		go func() {
+			<-done
+			s.Close()
+		}()
+	}
+	if rcvbuf != 0 {
+		err = pkgHandle.SetSocketReceiveBufferSize(rcvbuf, false)
+		if err != nil {
+			return err
+		}
+	}
+
+	go func() {
+		defer close(ch)
+		for {
+			msgs, from, err := s.Receive()
+			if err != nil {
+				if cberr != nil {
+					cberr(err)
+				}
+				return
+			}
+			if from.Pid != nl.PidKernel {
+				if cberr != nil {
+					cberr(fmt.Errorf("Wrong sender portid %d, expected %d", from.Pid, nl.PidKernel))
+				}
+				continue
+			}
+			for _, m := range msgs {
+				if m.Header.Type == unix.NLMSG_DONE {
+					continue
+				}
+				if m.Header.Type == unix.NLMSG_ERROR {
+					//native := nl.NativeEndian()
+					error := int32(native.Uint32(m.Data[0:4]))
+					if error == 0 {
+						continue
+					}
+					if cberr != nil {
+						cberr(fmt.Errorf("error message: %v",
+							syscall.Errno(-error)))
+					}
+					continue
+				}
+				msgType := m.Header.Type
+
+				if nflnSubsysID(msgType) != unix.NFNL_SUBSYS_CTNETLINK { //&& nflnSubsysID(msgType) != unix.NFNL_SUBSYS_CTNETLINK_EXP {
+					if cberr != nil {
+						cberr(fmt.Errorf("bad message type: %d", msgType))
+					}
+					continue
+				}
+
+				ctEvtType := nl.IPCTNL_MSG_CT_NEW
+
+				switch nl.CntlMsgType(nflnMsgType(msgType)) {
+				case nl.IPCTNL_MSG_CT_NEW:
+					ctEvtType = nl.IPCTNL_MSG_CT_GET
+					if m.Header.Flags&(syscall.NLM_F_CREATE|syscall.NLM_F_EXCL) > 0 {
+						ctEvtType = nl.IPCTNL_MSG_CT_NEW
+					}
+				case nl.IPCTNL_MSG_CT_DELETE:
+					ctEvtType = nl.IPCTNL_MSG_CT_DELETE
+				}
+
+				flow := parseRawData(m.Data)
+				if err != nil {
+					if cberr != nil {
+						cberr(fmt.Errorf("could not parse flow: %v", err))
+					}
+					continue
+				}
+
+				ch <- ConntrackEvent{
+					Type: ctEvtType,
+					Flow: *flow,
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+// NFNL_MSG_TYPE
+func nflnMsgType(x uint16) uint8 {
+	return uint8(x & 0x00ff)
+}
+
+// NFNL_SUBSYS_ID
+func nflnSubsysID(x uint16) uint8 {
+	return uint8((x & 0xff00) >> 8)
+}
